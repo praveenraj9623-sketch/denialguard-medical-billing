@@ -29,6 +29,13 @@ from unittest.mock import patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _select_legacy_provider(monkeypatch):
+    """These pre-migration tests exercise the optional Anthropic path explicitly."""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+
+
 from agents.orchestrator import run_review
 from app.claim_intake import build_manual_claim
 from db.audit_repository import AuditDecision, AuditRepository
@@ -209,8 +216,8 @@ def test_manual_claim_invokes_coverage_and_coding_agents_like_demo_claim(mock_co
     assert any(f.rule == "coding_validation" for f in assessment.findings)
     assert assessment.checks_run == [
         *CHECKS_RUN,
-        "Coverage validation — LLM medical necessity review (RAG-grounded, JSON fallback)",
-        "Coding validation — LLM coding defensibility review",
+        "Anthropic: Coverage validation — LLM medical necessity review (RAG-grounded, JSON fallback) — complete",
+        "Anthropic: Coding validation — LLM coding defensibility review — complete",
     ]
     assert retrieved_policies["coverage_validation"]
     assert retrieved_policies["coding_validation"]
@@ -307,13 +314,15 @@ def test_manual_claim_runs_when_vector_store_unavailable(monkeypatch):
             return response
 
         mock_cov_anthropic.return_value.messages.create.return_value = _no_concern_response("no_coverage_concern")
-        mock_coding_anthropic.return_value.messages.create.return_value = _no_concern_response("no_coding_concern")
+        mock_coding_anthropic.return_value.messages.create.side_effect = [
+            _no_concern_response("no_coverage_concern"), _no_concern_response("no_coding_concern")
+        ]
 
         claim_dict = _manual_claim_dict()  # CPT 99213 + ICD Z00.00 — in the JSON corpus
         claim = load_claim(claim_dict)
         assessment, retrieved_policies = run_review(claim)
 
-    assert "Coverage validation — LLM medical necessity review (RAG-grounded, JSON fallback)" in assessment.checks_run
+    assert "Anthropic: Coverage validation — LLM medical necessity review (RAG-grounded, JSON fallback) — complete" in assessment.checks_run
     assert all(p.get("retrieval_source") == "json_fallback" for p in retrieved_policies["coverage_validation"])
     assert all(p.get("retrieval_source") == "json_fallback" for p in retrieved_policies["coding_validation"])
 

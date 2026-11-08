@@ -1,5 +1,5 @@
 """
-Streamlit entry point for the Denial Prevention Copilot.
+Streamlit entry point for the DenialGuard.
 
 Responsibilities:
   - Two claim entry modes: Sample Claim (synthetic JSON) and Manual Claim Entry.
@@ -26,9 +26,8 @@ if str(_ROOT) not in sys.path:
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
-load_dotenv()
+
 
 from rules.models import Citation, Finding
 from rules.rule_engine import load_claim, review_claim, overall_risk, CHECKS_RUN
@@ -36,9 +35,11 @@ from rules.data_source_status import get_data_source_status
 from rules import cms_asset_fetch, icd10_loader, mue_loader, ncci_loader
 from agents.coverage_validation import validate_coverage
 from agents.orchestrator import run_review
-from agents.secrets import get_secret
+from agents.secrets import clear_session_key
+from agents.provider import configured, provider_name, key_name
 from db.audit_repository import AuditDecision, AuditRepository
 from retrieval.policy_repository import get_citation_detail
+from app.ambulance_prediction import render_ambulance_prediction
 from app.claim_intake import (
     PAYER_ID_MAP,
     WORKED_EXAMPLE,
@@ -52,7 +53,7 @@ from app.claim_intake import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_AI_ENABLED: bool = bool(get_secret("ANTHROPIC_API_KEY"))
+_AI_ENABLED: bool = configured()
 
 CLAIMS_FILE = pathlib.Path(__file__).parent.parent / "data" / "synthetic" / "sample_claims.json"
 CACHED_AI_DEMO_FILE = pathlib.Path(__file__).parent.parent / "data" / "synthetic" / "cached_ai_demo_artifacts.json"
@@ -72,7 +73,7 @@ _RISK_CONFIG = {
     "HIGH":  ("🔴 HIGH RISK — immediate attention required", "error"),
     "MEDIUM":("🟡 MEDIUM RISK — review recommended", "warning"),
     "LOW":   ("🔵 LOW RISK — minor issues noted", "info"),
-    "CLEAN": ("🟢 CLEAN — no denial risks identified", "success"),
+    "CLEAN": ("🟢 No findings in completed checks", "success"),
 }
 
 _SL_COLS = [1.7, 0.8, 0.8, 0.6, 1.1, 1.1, 1.1, 1.1, 0.5]
@@ -106,7 +107,7 @@ _RECOMMENDED_ACTION = {
     "HIGH": "Review before submission.",
     "MEDIUM": "Review recommended before submission.",
     "LOW": "Low risk — spot-check if time allows.",
-    "CLEAN": "No action needed.",
+    "CLEAN": "Human review remains required before submission. Check which validations ran.",
 }
 
 
@@ -116,7 +117,7 @@ _RECOMMENDED_ACTION = {
 
 @st.cache_data(show_spinner=False)
 def load_claims() -> list[dict]:
-    with open(CLAIMS_FILE) as f:
+    with open(CLAIMS_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -125,10 +126,10 @@ def load_cached_ai_demo_artifacts() -> dict:
     """
     Pre-generated AI agent findings (data/synthetic/cached_ai_demo_artifacts.json),
     captured from real validate_coverage()/validate_coding() runs. Shown only when
-    ANTHROPIC_API_KEY is absent, so public users can preview representative AI
+    GROQ_API_KEY is absent, so public users can preview representative AI
     output for the designated sample claims without making a live API call.
     """
-    with open(CACHED_AI_DEMO_FILE) as f:
+    with open(CACHED_AI_DEMO_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -499,9 +500,9 @@ def _run_full_review_safely(claim):
     try:
         return run_review(claim)
     except Exception as exc:
-        logging.getLogger(__name__).exception("Full review failed for claim %s", claim.claim_id)
+        logging.getLogger(__name__).error("Full review failed for claim %s", claim.claim_id)
         st.error(
-            f"⚠️ Full review could not complete due to an unexpected error: {exc}\n\n"
+            "⚠️ Full review could not complete due to an unexpected error.\n\n"
             "Deterministic rule-engine review is still available via "
             "\"Review Claim (rule layer only)\"."
         )
@@ -522,9 +523,20 @@ def _render_full_review_results(
     to the policies that agent retrieved — used to show "Supporting Policies
     Reviewed" on the matching finding card.
     """
-    label, kind = _RISK_CONFIG[risk_assessment.score]
-    getattr(st, kind)(label)
-    _render_risk_explanation(risk_assessment.score, risk_assessment.findings)
+    mode = risk_assessment.review_mode
+    if mode == "incomplete":
+        st.warning("AI review failed or incomplete — available findings still require human review.")
+        for agent, detail in risk_assessment.ai_details.items():
+            st.caption(f"{agent}: {detail['status']} ({detail['error'] or 'completed'})")
+            for problem in detail.get("validation_errors", []):
+                st.text(f"{problem['path']}: expected {problem['expected']}; received {problem['actual']}")
+        st.caption(f"Risk from completed checks: {risk_assessment.score}. Overall review is incomplete.")
+    else:
+        st.info(f"Live {risk_assessment.ai_provider.title()} review — AI checks completed." if mode == "live"
+                else "Rule-only review — AI checks did not run.")
+        label, kind = _RISK_CONFIG[risk_assessment.score]
+        getattr(st, kind)(label)
+        _render_risk_explanation(risk_assessment.score, risk_assessment.findings)
 
     npi_short_circuited = any(
         f.rule == "npi_invalid" and f.severity == "HIGH" for f in risk_assessment.findings
@@ -553,8 +565,10 @@ def _render_full_review_results(
                 repo=repo,
                 retrieved_policies=policies_for_finding,
             )
-    else:
-        st.success("✅ No findings — rule checks and coverage analysis found no denial risk indicators.")
+    elif mode == "live":
+        st.success("No findings from completed rule and AI checks. Human review remains required.")
+    elif mode == "rule_only":
+        st.info("No rule findings. AI checks did not run.")
 
 
 def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepository) -> None:
@@ -579,7 +593,10 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
         )
         if st.button("🤖 Run AI Coverage Analysis", key=f"ai_btn_{claim_id}"):
             with st.spinner("Querying policy documents and analyzing coverage…"):
-                ai_findings, ai_policies = validate_coverage(claim)
+                output = validate_coverage(claim)
+                ai_findings, ai_policies = output
+                st.session_state["ai_status"] = getattr(output, "status", "complete")
+                st.session_state["ai_error"] = getattr(output, "error", "")
             st.session_state["ai_findings"] = ai_findings
             st.session_state["ai_policies"] = ai_policies
             st.session_state["ai_reviewed"] = True
@@ -597,8 +614,10 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
                     repo=repo,
                     retrieved_policies=ai_policies,
                 )
+        elif st.session_state.get("ai_status") == "complete":
+            st.success(f"Live {provider_name().title()} coverage review completed: no coverage concerns reported.")
         else:
-            st.success("✅ No coverage concerns identified by AI analysis.")
+            st.warning("AI review failed or incomplete: " + st.session_state.get("ai_error", "unknown"))
 
         if st.button("↩ Clear AI Analysis", key=f"ai_clear_{claim_id}"):
             st.session_state.pop("ai_findings", None)
@@ -609,7 +628,7 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
 
 def _render_cached_ai_demo(claim_id: str) -> None:
     """
-    When AI is disabled (no ANTHROPIC_API_KEY), show pre-generated AI findings for
+    When AI is disabled (no GROQ_API_KEY), show pre-generated AI findings for
     designated sample claims so public users can preview representative agent
     output. Read-only — no Accept/Override/Save, since these findings were not
     produced by a live run of this session. Never shown when AI is enabled; the
@@ -625,7 +644,7 @@ def _render_cached_ai_demo(claim_id: str) -> None:
     st.divider()
     st.info(
         "📋 **Pre-generated demonstration results** — AI is currently disabled "
-        "(no `ANTHROPIC_API_KEY`). The findings below were captured in advance "
+        "(no key for the selected provider). The findings below were captured in advance "
         "from a real run of the Coverage and Coding agents against this sample "
         "claim, so you can preview representative AI output without making a "
         "live API call. Provide your own key to run live AI analysis instead."
@@ -665,7 +684,7 @@ def _clear_review_state() -> None:
     for key in (
         "findings", "risk", "reviewed_claim_id",
         "manual_reviewed", "manual_claim_dict",
-        "ai_findings", "ai_policies", "ai_reviewed",
+        "ai_findings", "ai_policies", "ai_reviewed", "ai_status", "ai_error",
         "full_review_assessment", "full_review_retrieved_policies",
         "full_review_claim_id", "full_review_claim_dict",
     ):
@@ -877,6 +896,9 @@ def _render_manual_mode(reviewer_name: str, repo: AuditRepository) -> None:
     st.divider()
 
     # ---- Service-Line Coding Grid ----
+    st.caption("Claim ID identifies this review; payer is the insurer; NPI identifies the provider. "
+               "CPT/HCPCS describes the service, ICD-10 describes the diagnosis, modifiers add service details, "
+               "and units count how many services were billed. Notes add context; note review is a future feature.")
     st.markdown("#### Service Lines")
 
     hdr_cols = st.columns(_SL_COLS)
@@ -920,6 +942,8 @@ def _render_manual_mode(reviewer_name: str, repo: AuditRepository) -> None:
     st.divider()
     st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
+    st.caption("Full Review runs rules and, when configured, live AI policy checks. Rule-only uses deterministic checks. "
+               "Accept means agreeing with a finding, not approving the claim.")
     # ---- Review buttons, side by side ----
     btn_full, btn_rule = st.columns(2)
     with btn_full:
@@ -973,6 +997,7 @@ def _render_manual_mode(reviewer_name: str, repo: AuditRepository) -> None:
 
     # ---- Findings display ----
     if st.session_state.get("manual_reviewed"):
+        st.info("Rule-only review — AI checks are separate.")
         findings = st.session_state["findings"]
         risk = st.session_state["risk"]
         reviewed_id = st.session_state.get("reviewed_claim_id", "")
@@ -1047,6 +1072,8 @@ def _render_sample_mode(reviewer_name: str, repo: AuditRepository) -> None:
     st.divider()
     st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
+    st.caption("Full Review runs rules plus configured live AI. Rule-only skips AI. "
+               "Accept means agreeing with a finding, not approving a claim.")
     btn_full, btn_rule = st.columns(2)
     with btn_full:
         run_full_clicked = st.button(
@@ -1093,6 +1120,7 @@ def _render_sample_mode(reviewer_name: str, repo: AuditRepository) -> None:
         "findings" in st.session_state
         and st.session_state.get("reviewed_claim_id") == claim_dict["claim_id"]
     ):
+        st.info("Rule-only review — AI checks are separate.")
         findings = st.session_state["findings"]
         risk = st.session_state["risk"]
 
@@ -1140,41 +1168,30 @@ _DATA_STATUS_LABELS = {
     "not_checked": ("⚪ Data: Not Refreshed", "Not Refreshed"),
 }
 
-_SESSION_API_KEY_NAME = "ANTHROPIC_API_KEY"
-
-
 def _render_session_api_key_popover() -> None:
-    """
-    Small gear-icon popover letting a user provide their own Anthropic API key
-    for this browser session only. The key is stored solely in
-    st.session_state (never written to disk, never logged, never sent to the
-    audit DB) under the same name agents.secrets.get_secret() checks first —
-    see that module for the full resolution order. Closing or refreshing the
-    browser tab ends the session and the key with it.
-    """
-    with st.popover("Anthropic API Key", help="API key settings"):
-        st.caption(
-            "Live Coverage and Coding agents require an Anthropic API key. "
-            "You may provide your own key for this browser session. The key "
-            "is not stored or persisted."
-        )
-        session_key_input = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            key="session_api_key_input",
-            placeholder="sk-ant-...",
-        )
+    """Session-only override; callbacks clear both stored and widget copies."""
+    name = key_name()
+    provider = provider_name().title()
+    with st.popover(f"{provider} API Key", help="API key settings"):
+        st.caption(f"Selected provider: {provider}. A configured key is not a verified connection. "
+                   "The session key is held in memory and is never written to disk.")
+        if not name:
+            st.warning("Unsupported LLM_PROVIDER. Choose groq or anthropic in local configuration.")
+            return
+        widget_key = "session_api_key_input_" + name
+        value = st.text_input(f"{provider} API Key", type="password", key=widget_key)
+        def enable():
+            entered = st.session_state.get(widget_key, "").strip()
+            if entered:
+                st.session_state[name] = entered
+                st.session_state.pop(widget_key, None)
         col_enable, col_clear = st.columns(2)
-        with col_enable:
-            if st.button("Enable AI", key="enable_session_api_key_btn", use_container_width=True):
-                if session_key_input:
-                    st.session_state[_SESSION_API_KEY_NAME] = session_key_input
-                    st.rerun()
-        with col_clear:
-            if st.button("Clear Key", key="clear_session_api_key_btn", use_container_width=True):
-                st.session_state.pop(_SESSION_API_KEY_NAME, None)
-                st.rerun()
-        st.caption("Without a key, pre-generated cached AI results are shown for claims.")
+        col_enable.button("Enable AI", key="enable_session_api_key_btn", on_click=enable,
+                          use_container_width=True)
+        col_clear.button("Clear Key", key="clear_session_api_key_btn", on_click=clear_session_key,
+                         args=(st.session_state, name), use_container_width=True)
+        st.caption("Clear Key removes the session override and password field. An owner-configured "
+                   "key may still apply. Without a key, reviews use rules and labelled demo results.")
 
 
 def _render_header() -> str:
@@ -1195,7 +1212,7 @@ def _render_header() -> str:
 
     col_title, col_badge = st.columns([4, 2])
     with col_title:
-        st.markdown("## 🏥 Denial Prevention Copilot")
+        st.markdown("## 🏥 DenialGuard")
         st.caption("AI researches. Humans decide.")
     with col_badge:
         st.markdown(
@@ -1217,13 +1234,12 @@ def _render_header() -> str:
             if _AI_ENABLED:
                 st.markdown(
                     f'<div style="margin-bottom:25px;">'
-                    f'{_pill("● AI: Enabled", "#16a34a", font_size="0.92rem", padding="5px 12px")}'
+                    f'{_pill(f"● {provider_name().title()}: key configured (unverified)", "#16a34a", font_size="0.92rem", padding="5px 12px")}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
-            # AI: Disabled pill intentionally hidden — the gear/key control next
-            # to it already conveys "no key configured" via its own label; no
-            # change to _AI_ENABLED's wording or logic when it IS shown.
+            if not _AI_ENABLED:
+                st.caption(f"{provider_name().title()}: no key — rule-only review")
         with c_gear:
             with st.container(key="ai_gear_col"):
                 _render_session_api_key_popover()
@@ -1292,7 +1308,7 @@ def _render_header() -> str:
 @st.dialog("Getting Started", width="large")
 def _getting_started_dialog() -> None:
     st.markdown(
-        "**Denial Prevention Copilot** reviews a healthcare claim *before* it's "
+        "**DenialGuard** reviews a healthcare claim *before* it's "
         "submitted and flags issues that commonly cause payer denials — bundling "
         "conflicts, unit limits, missing modifiers, invalid codes, and medical "
         "necessity / coverage concerns."
@@ -1307,14 +1323,14 @@ def _getting_started_dialog() -> None:
         "- **Rule Engine** — deterministic checks (NCCI bundling, MUE unit limits, "
         "NPI validity, ICD-10/CPT code validity, missing modifiers). Always runs, no API key needed.\n"
         "- **Coverage Agent** / **Coding Agent** — LLM-backed, citation-grounded checks "
-        "against real LCD/NCD policy text. Require your own `ANTHROPIC_API_KEY`."
+        "against real LCD/NCD policy text. Require a key for the selected provider (Groq by default)."
     )
 
     st.markdown("#### AI status you'll see in this app")
     st.markdown(
-        "- **● AI: Enabled** — an API key is configured (by the app owner, or by you via "
+        "- **Key configured (unverified)** — an API key is configured (by the app owner, or by you via "
         "the ⚙️ icon next to the pill for this browser session); Coverage/Coding agents run live.\n"
-        "- **● AI: Disabled** — no key configured; only the deterministic Rule Engine runs. "
+        "- **Rule-only review** — no key configured; only the deterministic Rule Engine runs. "
         "Click the ⚙️ icon to add your own key for this session.\n"
         "- **📋 Pre-generated demonstration results** — shown per-claim for select demo "
         "scenarios when AI is disabled, so you can preview real agent output without an API call."
@@ -1325,6 +1341,7 @@ def _getting_started_dialog() -> None:
         "- Confidence reflects the system's certainty in a finding — it is **not** "
         "a denial/approval guarantee.\n"
         "- Findings below 70% confidence trigger a manual-review flag.\n"
+        "- Accept means agreeing with a finding; it does not approve a claim.\n"
         "- AI confidence is not a substitute for coding or compliance judgment."
     )
 
@@ -1348,7 +1365,7 @@ def _getting_started_dialog() -> None:
 
     with st.expander("What Changed (Release Notes)"):
         st.markdown(
-            "**MVP (V1) — Denial Prevention Copilot**\n\n"
+            "**MVP (V1) — DenialGuard**\n\n"
             "Initial public demo release focused on AI-assisted claim review and "
             "denial risk identification using synthetic data.\n\n"
             "**Includes:**\n"
@@ -1373,7 +1390,7 @@ def _getting_started_dialog() -> None:
             "- Synthetic data only\n"
             "- Not for clinical or billing use\n"
             "- Not production healthcare software\n"
-            "- Live AI features require Anthropic API configuration\n"
+            "- Live AI features use Groq by default; optional Anthropic support remains available\n"
             "- Audit history is demo-local and may reset on hosted deployments"
         )
 
@@ -1403,7 +1420,7 @@ def _render_recommended_shortcuts(claims: list[dict]) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="Denial Prevention Copilot",
+        page_title="DenialGuard",
         page_icon="💵",
         layout="wide",
     )
@@ -1421,7 +1438,7 @@ def main() -> None:
     reviewer_name = _render_header()
     st.divider()
 
-    tab_review, tab_audit = st.tabs(["🔍 Claim Review", "📋 Audit Trail"])
+    tab_review, tab_audit, tab_ambulance = st.tabs(["🔍 Claim Review", "📋 Audit Trail", "🚑 Ambulance prediction"])
 
     with tab_review:
         st.markdown("#### Claim Details")
@@ -1456,6 +1473,9 @@ def main() -> None:
 
     with tab_audit:
         _render_audit_trail(repo)
+
+    with tab_ambulance:
+        render_ambulance_prediction()
 
 
 if __name__ == "__main__":

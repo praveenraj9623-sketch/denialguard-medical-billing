@@ -1,0 +1,4 @@
+# Preserve generated artifact checksums across Windows/Linux Git checkouts.
+artifacts/ambulance/*.csv text eol=lf
+artifacts/ambulance/*.json text eol=lf
+artifacts/ambulance/*.joblib binary

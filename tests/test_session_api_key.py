@@ -22,6 +22,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _select_legacy_provider(monkeypatch):
+    """These pre-migration tests exercise the optional Anthropic path explicitly."""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+
+
 from agents.orchestrator import _ai_enabled
 
 

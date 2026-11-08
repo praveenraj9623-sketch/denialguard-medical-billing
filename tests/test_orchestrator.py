@@ -20,6 +20,13 @@ from unittest.mock import patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _select_legacy_provider(monkeypatch):
+    """These pre-migration tests exercise the optional Anthropic path explicitly."""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+
+
 from agents.orchestrator import run_review
 from rules.models import Citation, ClaimIn, Finding
 from rules.rule_engine import CHECKS_RUN

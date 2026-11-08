@@ -17,6 +17,12 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 
+@pytest.fixture(autouse=True)
+def _groq_provider(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+
+
+
 def _run_app():
     # default_timeout is a generous safety margin. The header's Data Source
     # status is now fully user-initiated (a "Check CMS Data Availability"
@@ -31,7 +37,7 @@ def _run_app():
 
 
 def test_app_launches_with_no_exception_when_api_key_missing(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     at = _run_app()
     assert not at.exception
 
@@ -39,19 +45,19 @@ def test_app_launches_with_no_exception_when_api_key_missing(monkeypatch):
 def test_header_shows_ai_disabled_pill_when_api_key_missing(monkeypatch):
     """v1.8a replaced the sidebar AI Agents box with a header pill. The
     session-API-key gear popover (Phase 13) replaced the old '.env' banner —
-    the pill itself must still read exactly 'AI: Disabled', no other wording."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    the pill itself must still read exactly 'no key — rule-only review', no other wording."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     at = _run_app()
 
-    markdown_text = " ".join(el.value for el in at.markdown)
-    assert "AI: Disabled" in markdown_text
-    assert "AI: Enabled" not in markdown_text
+    markdown_text = " ".join(el.value for el in at.markdown) + " ".join(el.value for el in at.caption)
+    assert "no key — rule-only review" in markdown_text
+    assert "key configured (unverified)" not in markdown_text
 
 
 def test_no_dotenv_instructions_anywhere_in_main_ui(monkeypatch):
     """The session API key UI (gear icon) replaced the old '.env'-instructing
     banner entirely — no main-UI text should tell a user to edit .env."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     at = _run_app()
 
     all_text = " ".join(el.value for el in at.markdown) + " ".join(el.value for el in at.caption)
@@ -59,25 +65,25 @@ def test_no_dotenv_instructions_anywhere_in_main_ui(monkeypatch):
 
 
 def test_header_does_not_show_ai_enabled_pill_when_api_key_missing(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     at = _run_app()
 
-    markdown_text = " ".join(el.value for el in at.markdown)
-    assert "AI: Enabled" not in markdown_text
+    markdown_text = " ".join(el.value for el in at.markdown) + " ".join(el.value for el in at.caption)
+    assert "key configured (unverified)" not in markdown_text
 
 
 def test_header_shows_ai_enabled_pill_when_api_key_present(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     at = _run_app()
 
-    markdown_text = " ".join(el.value for el in at.markdown)
-    assert "AI: Enabled" in markdown_text
-    assert "AI: Disabled" not in markdown_text
+    markdown_text = " ".join(el.value for el in at.markdown) + " ".join(el.value for el in at.caption)
+    assert "key configured (unverified)" in markdown_text
+    assert "no key — rule-only review" not in markdown_text
 
 
 def test_deterministic_review_tab_renders_with_no_exception_when_api_key_missing(monkeypatch):
     """Sample/manual claim review tabs must render without the deterministic path breaking."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     at = _run_app()
 
     assert not at.exception

@@ -100,21 +100,34 @@ def test_save_decision_self_heals_when_table_missing(tmp_path):
     assert rows[0]["finding_id"] == "abc123def456"
 
 
-def test_repository_with_no_db_path_arg_uses_default():
-    """AuditRepository() with no args must still work end-to-end against the
-    temp-dir default — explicit db_path (as every other test uses) must remain
-    a fully-supported override, not the only working path."""
-    DB_PATH.unlink(missing_ok=True)
-    try:
-        repo = AuditRepository()
-        assert repo._db_path == DB_PATH
-        repo.initialize_database()
-        decision = _make_decision()
-        repo.save_decision(decision)
-        rows = repo.get_decisions(claim_id=decision.claim_id)
-        assert any(r["finding_id"] == decision.finding_id for r in rows)
-    finally:
-        DB_PATH.unlink(missing_ok=True)
+def test_repository_with_no_db_path_arg_uses_default(tmp_path):
+    """Exercise the default constructor in an isolated process/temp directory.
+
+    Never unlink a developer's real default audit DB; subprocess exit also
+    releases SQLite file handles before pytest cleans up on Windows.
+    """
+    import os
+    import subprocess
+    import sys
+
+    environment = {**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)}
+    code = """
+import pathlib
+import sys
+from db.audit_repository import AuditRepository, DB_PATH
+from tests.test_audit import _make_decision
+assert DB_PATH.parent == pathlib.Path(sys.argv[1])
+repo = AuditRepository()
+assert repo._db_path == DB_PATH
+repo.initialize_database()
+decision = _make_decision()
+repo.save_decision(decision)
+assert any(r['finding_id'] == decision.finding_id for r in repo.get_decisions(claim_id=decision.claim_id))
+assert decision.finding_id in repo.export_decisions_csv()
+"""
+    result = subprocess.run([sys.executable, "-c", code, str(tmp_path)], env=environment,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------

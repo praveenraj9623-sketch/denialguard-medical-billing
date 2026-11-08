@@ -1,0 +1,90 @@
+{
+  "dummy_prior": {
+    "validation": {
+      "threshold": 0.36,
+      "denial_precision": 0.365,
+      "denial_recall": 1.0,
+      "denial_f1": 0.5347985347985348,
+      "average_precision": 0.365,
+      "confusion_matrix": [
+        [
+          0,
+          762
+        ],
+        [
+          0,
+          438
+        ]
+      ],
+      "class_counts": {
+        "not_denied": 762,
+        "denied": 438
+      }
+    },
+    "test": {
+      "threshold": 0.36,
+      "denial_precision": 0.3675,
+      "denial_recall": 1.0,
+      "denial_f1": 0.5374771480804388,
+      "average_precision": 0.3675,
+      "confusion_matrix": [
+        [
+          0,
+          759
+        ],
+        [
+          0,
+          441
+        ]
+      ],
+      "class_counts": {
+        "not_denied": 759,
+        "denied": 441
+      }
+    }
+  },
+  "logistic_regression": {
+    "validation": {
+      "threshold": 0.32,
+      "denial_precision": 0.6129032258064516,
+      "denial_recall": 0.7808219178082192,
+      "denial_f1": 0.6867469879518072,
+      "average_precision": 0.7198917726452168,
+      "confusion_matrix": [
+        [
+          546,
+          216
+        ],
+        [
+          96,
+          342
+        ]
+      ],
+      "class_counts": {
+        "not_denied": 762,
+        "denied": 438
+      }
+    },
+    "test": {
+      "threshold": 0.32,
+      "denial_precision": 0.5952380952380952,
+      "denial_recall": 0.7936507936507936,
+      "denial_f1": 0.6802721088435374,
+      "average_precision": 0.7014574136736871,
+      "confusion_matrix": [
+        [
+          521,
+          238
+        ],
+        [
+          91,
+          350
+        ]
+      ],
+      "class_counts": {
+        "not_denied": 759,
+        "denied": 441
+      }
+    }
+  }
+}

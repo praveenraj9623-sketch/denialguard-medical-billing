@@ -2,7 +2,7 @@
 Coverage Validation Agent — v2 (ChromaDB vector retrieval, JSON fallback).
 
 Retrieves up to 3 LCD/NCD/Article policy chunks for the claim's CPT and
-ICD-10 codes, then asks Claude (via structured tool use) to evaluate coverage
+ICD-10 codes, then asks the selected provider (via structured tool use) to evaluate coverage
 and medical necessity.
 
 Retrieval order (see _retrieve_policies()):
@@ -24,9 +24,9 @@ Governance rules (all enforced here):
   - No API key → return []
   - No retrieved LCD/NCD/Article policy (from either source) → return []
   - One model call per invocation, no background calls
-  - Model must call a tool (tool_choice="any"); otherwise return []
+  - Exactly one allowed, validated tool is required; otherwise mark review failed
   - citation_doc_id not in retrieved set → suppress finding
-  - Model raises exception → return []
+  - Model errors return no findings with explicit failed status
 """
 
 import hashlib
@@ -35,23 +35,20 @@ import pathlib
 import re
 
 import anthropic
-from dotenv import load_dotenv
+from agents.provider import AgentResult, ReviewError, complete, configured
 
 from retrieval.chunking import (
     is_low_information_excerpt,
     starts_with_dangling_fragment,
     trim_leading_fragment,
 )
-from agents.secrets import get_secret
 from retrieval.policy_repository import find_policies_by_codes
 from retrieval.vector_store import VectorStore
 from rules.models import Citation, ClaimIn, Finding
 
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "claude-sonnet-4-6"
 _LCD_SOURCE_TYPES = {"LCD", "NCD"}
 _MAX_POLICIES = 3
 _EXCERPT_SNIPPET_MAX_CHARS = 400
@@ -91,6 +88,9 @@ _SYSTEM_PROMPT = (
     "call report_coverage_finding with a specific citation from the provided documents.\n"
     "- Do not call report_coverage_finding for a generic payer-scrutiny caution that is not tied to a "
     "specific, cited policy concern.\n"
+    "- Every string argument must contain non-whitespace text. "
+    "Confidence must be a JSON number between 0 and 1, not a quoted string. "
+    "Provide all required arguments for the chosen tool and no extra arguments.\n"
     "- You must call exactly one tool."
 )
 
@@ -104,34 +104,49 @@ _TOOLS = [
         ),
         "input_schema": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "issue": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "Short description of the coverage or medical necessity concern.",
                 },
                 "recommendation": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "What the billing specialist should do to resolve or document this concern.",
                 },
                 "severity": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "enum": ["HIGH", "MEDIUM", "LOW"],
                     "description": "HIGH = likely denial, MEDIUM = documentation gap, LOW = advisory.",
                 },
                 "confidence": {
                     "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
                     "description": "Confidence score 0.0–1.0 that this is a real coverage concern.",
                 },
                 "citation_doc_id": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "document_id of the policy document being cited (must be from the provided list).",
                 },
                 "citation_section": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "Section name or heading within the cited document.",
                 },
                 "citation_excerpt": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "Verbatim excerpt from the cited document that supports this finding.",
                 },
             },
@@ -154,9 +169,12 @@ _TOOLS = [
         ),
         "input_schema": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "reason": {
                     "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
                     "description": "Brief explanation of why no concern was found.",
                 },
             },
@@ -184,40 +202,27 @@ def validate_coverage(
     engine already raised — see _SYSTEM_PROMPT. Omitting it (the default)
     preserves prior behavior exactly.
 
+    AgentResult retains (findings, policies) unpacking and adds status/error.
     findings is [] if no API key, no matching LCD/NCD policies, model error, or
     model calls no_coverage_concern.
     """
-    api_key = get_secret("ANTHROPIC_API_KEY")
-    if not api_key:
-        return [], []
-
+    if not configured():
+        return AgentResult([], [], "rule_only")
     lcd_policies = _retrieve_policies(claim)
     if not lcd_policies:
-        return [], []
-
-    retrieved_doc_ids = {p["document_id"] for p in lcd_policies}
-
-    model = get_secret("ANTHROPIC_MODEL", _DEFAULT_MODEL)
-    user_message = _build_user_message(claim, lcd_policies, rule_findings)
-
+        return AgentResult([], [], "incomplete", "no_retrieved_policies")
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            tools=_TOOLS,
-            tool_choice={"type": "any"},
-            messages=[{"role": "user", "content": user_message}],
-        )
-        findings = _parse_response(response, retrieved_doc_ids, lcd_policies, claim.claim_id)
+        response = complete(_SYSTEM_PROMPT, _build_user_message(claim, lcd_policies, rule_findings),
+                            _TOOLS, lcd_policies)
+        findings = _parse_response(response, {p["document_id"] for p in lcd_policies},
+                                   lcd_policies, claim.claim_id)
+        return AgentResult(findings, lcd_policies)
     except Exception as exc:
-        # Covers both the API call and response parsing — an unexpected or
-        # malformed model response must degrade to "no finding", not propagate
-        # and crash the orchestrator/Streamlit run, exactly like an API error.
-        logger.warning("Coverage validation error: %s", exc)
-        return [], lcd_policies
-    return findings, lcd_policies
+        category = str(exc) if isinstance(exc, ReviewError) else "invalid_response"
+        logger.warning("Coverage review did not complete: %s", category)
+        errors = exc.validation_errors if isinstance(exc, ReviewError) else []
+        return AgentResult([], lcd_policies, "failed", category, validation_errors=errors)
+
 
 
 def _get_vector_store() -> VectorStore:
@@ -329,6 +334,7 @@ def _clean_citation_excerpt(model_excerpt: str, fallback_chunk_text: str) -> str
     candidate = (model_excerpt or "").strip()
     if (
         candidate
+        and candidate in fallback_chunk_text
         and not starts_with_dangling_fragment(candidate)
         and not is_low_information_excerpt(candidate)
     ):
@@ -413,23 +419,21 @@ def _parse_response(
             citation = Citation(
                 source="coverage_validation",
                 doc_id=doc_id,
-                section=args.get("citation_section", policy.get("section", "")),
+                section=policy.get("section", ""),
                 edition=policy.get("edition", ""),
                 effective_date=policy.get("effective_date"),
                 excerpt=_clean_citation_excerpt(args.get("citation_excerpt", ""), policy.get("excerpt", "")),
             )
 
-            severity = args.get("severity", "MEDIUM")
-            if severity not in ("HIGH", "MEDIUM", "LOW"):
-                severity = "MEDIUM"
+            severity = args["severity"]
 
             finding = Finding(
                 rule="coverage_validation",
                 severity=severity,
-                issue=args.get("issue", "Coverage concern identified"),
-                recommendation=args.get("recommendation", "Review policy and documentation."),
+                issue=args["issue"],
+                recommendation=args["recommendation"],
                 citation=citation,
-                confidence=float(args.get("confidence", 0.7)),
+                confidence=args["confidence"],
                 source="agent_layer",
             )
             finding.finding_id = _stable_finding_id(claim_id, doc_id, finding.issue)

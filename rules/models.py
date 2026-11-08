@@ -24,7 +24,7 @@ When real CMS data files are loaded, `doc_id` becomes the versioned filename
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 
@@ -86,3 +86,7 @@ class RiskAssessment:
     findings: list[Finding]
     escalation_required: bool
     checks_run: list[str]
+
+    review_mode: str = "rule_only"
+    ai_provider: str = ""
+    ai_details: dict = field(default_factory=dict)

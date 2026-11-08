@@ -19,6 +19,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _select_legacy_provider(monkeypatch):
+    """These pre-migration tests exercise the optional Anthropic path explicitly."""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+
+
 from agents.coding_validation import (
     _SYSTEM_PROMPT,
     _build_user_message,
@@ -571,7 +578,7 @@ def test_clean_citation_excerpt_keeps_clean_model_excerpt_unchanged():
 
     result = _clean_citation_excerpt(
         "Problem-oriented E/M services billed with Z00.00 require modifier 25.",
-        fallback_chunk_text="irrelevant fallback text.",
+        fallback_chunk_text="Problem-oriented E/M services billed with Z00.00 require modifier 25. Extra context.",
     )
     assert result == "Problem-oriented E/M services billed with Z00.00 require modifier 25."
 
@@ -705,10 +712,22 @@ def _rule_finding(rule="ncci_conflict"):
 
 
 def test_system_prompt_instructs_not_to_duplicate_rule_layer_findings():
-    """TD-24 Phase 3: system prompt must tell the model not to restate rule-layer findings."""
-    assert "Do not restate or duplicate" in _SYSTEM_PROMPT
-    assert "no_coding_concern" in _SYSTEM_PROMPT
-    assert "genuinely" in _SYSTEM_PROMPT and "distinct" in _SYSTEM_PROMPT
+    """Existing rule findings must not suppress distinct, policy-supported concerns."""
+    prompt = " ".join(_SYSTEM_PROMPT.split())
+    rule_context = prompt.split("If that list is non-empty:", 1)[1].split("Rules:", 1)[0]
+    assert "Do not restate those — they are handled separately." in rule_context
+    assert "is distinct from a code-rule finding — report it whenever the policy text supports it." in rule_context
+    assert "call report_coding_finding with a specific citation from the provided documents." in prompt
+    assert "call no_coding_concern" in prompt
+
+
+def test_system_prompt_does_not_equate_no_rule_findings_with_clean_claim():
+    """No rule findings still requires an independent review of retrieved policy text."""
+    prompt = " ".join(_SYSTEM_PROMPT.split())
+    no_rules = prompt.split('If that list is "none":', 1)[1].split("If that list is non-empty:", 1)[0]
+    assert "evaluate the claim normally, based solely on the provided policy text" in no_rules
+    assert "The absence of a rule-layer finding is not evidence that the claim is clean" in no_rules
+    assert "Report a genuine, policy-supported" in no_rules
 
 
 def test_system_prompt_forbids_generic_payer_scrutiny_caveats():

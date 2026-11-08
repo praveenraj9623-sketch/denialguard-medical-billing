@@ -201,3 +201,24 @@ data/reference/coverage/
 *.sqlite3
 db/*.sqlite
 db/*.db
+
+# Local settings and runtime files
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.streamlit/secrets.toml
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+*.bak
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

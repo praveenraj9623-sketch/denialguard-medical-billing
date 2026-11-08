@@ -1,6 +1,12 @@
-# Denial Prevention Copilot
+# DenialGuard
 
 A portfolio / demo project: agentic pre-submission claim review that catches denial risks before a claim leaves the building. A deterministic rule layer (NCCI, MUE, NPI, code validity) and two citation-grounded LLM agents — Coverage Validation (medical necessity) and Coding Validation (diagnosis specificity, coding defensibility, payer scrutiny risk) — feed a single Unified Review that synthesizes a denial risk score. Every AI finding is backed by a cited LCD/NCD source. Humans make every final call.
+
+
+The separate **Ambulance prediction** tab uses a fitted scikit-learn model trained
+on simulated ambulance claims. It works entirely offline, is clearly labelled
+**Trained on synthetic data**, and is separate from rule risk and Groq findings.
+Its metrics measure agreement with invented outcomes, not real payer accuracy.
 
 A Documentation Review Agent remains part of the product vision and roadmap but is currently deferred (not implemented, not required for this MVP) — see `docs/Roadmap.md` Phase 6.
 
@@ -48,7 +54,7 @@ The MVP includes:
 - Session-scoped Anthropic API key entry via the UI (no `.env` required for end users)
 - Expanded automated test coverage (564+ passing tests)
 
-Engineering release history continues internally through v1.11.x releases, which represent deployment, reliability, testing, and operational hardening improvements beyond the original MVP scope. The public V1.0 MVP designation corresponds to engineering releases v1.8a (UI polish and first-time UX), v1.8b (citation transparency / Supporting Policies Reviewed), v1.9.x (Streamlit Cloud deployment readiness, audit-schema self-healing, ChromaDB graceful fallback, and manual-claim AI execution parity), v1.11-live-cms (optional Live CMS rule-layer data via GitHub Release Assets), v1.11.1 (CMS/Chroma policy retrieval enhancement deferred — tracked as TD-28), and v1.11.2 (session-scoped Anthropic API key via the UI gear icon). The in-app "Getting Started" → "What Changed" notes show only the public-facing V1.0 MVP summary; full engineering version history — v1.0 through v1.11.2 — is preserved in `docs/Roadmap.md`. 564 tests passing. Default AI model: Claude Sonnet 4.6 (override with `ANTHROPIC_MODEL`). See `docs/Technical_Debt_Register.md` for the full TD-24 calibration history and the Haiku/Sonnet/Opus model comparison behind that choice.
+Engineering release history continues internally through v1.11.x releases, which represent deployment, reliability, testing, and operational hardening improvements beyond the original MVP scope. The public V1.0 MVP designation corresponds to engineering releases v1.8a (UI polish and first-time UX), v1.8b (citation transparency / Supporting Policies Reviewed), v1.9.x (Streamlit Cloud deployment readiness, audit-schema self-healing, ChromaDB graceful fallback, and manual-claim AI execution parity), v1.11-live-cms (optional Live CMS rule-layer data via GitHub Release Assets), v1.11.1 (CMS/Chroma policy retrieval enhancement deferred — tracked as TD-28), and v1.11.2 (session-scoped Anthropic API key via the UI gear icon). The in-app "Getting Started" → "What Changed" notes show only the public-facing V1.0 MVP summary; full engineering version history — v1.0 through v1.11.2 — is preserved in `docs/Roadmap.md`. Historical upstream test and model results below predate the Groq migration. The current default is Groq `openai/gpt-oss-20b` (override with `GROQ_MODEL`). See `docs/Technical_Debt_Register.md` for the full TD-24 calibration history and the Haiku/Sonnet/Opus model comparison behind that choice.
 
 ## Demonstrated Capabilities
 
@@ -72,49 +78,91 @@ Engineering release history continues internally through v1.11.x releases, which
 | ![Supporting Policies Reviewed](docs/screenshots/04_supporting_policies_reviewed.png) | ![Getting Started dialog](docs/screenshots/05_getting_started_dialog.png) |
 | "Supporting Policies Reviewed" — every policy an AI agent considered, not just the one it cited (TD-22) | The Getting Started onboarding dialog |
 
-## Setup
+## Local setup (Windows, Python 3.11)
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # optional — see "AI features" below
+```powershell
+Set-Location C:\AI-Projects\denialguard-medical-billing
+py -3.11 -m venv .venv  # only when creating a new environment
+.\.venv\Scripts\python.exe -m pip install -r requirements-demo.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+.\.venv\Scripts\python.exe -m streamlit run app/main.py --server.port 8502
 ```
 
-## Run
+Stop the running server with Ctrl+C before restarting. The demo requirements omit
+optional ChromaDB. Coverage and coding retrieval keep the curated UTF-8 JSON
+policy fallback when ChromaDB is unavailable or the vector index is empty.
+`requirements.txt` includes ChromaDB for optional vector retrieval.
 
-```bash
-streamlit run app/main.py
+## AI features and review states
+
+Groq is the default live provider. Edit the root `.env` locally:
+
+```dotenv
+LLM_PROVIDER=groq
+GROQ_API_KEY=
+GROQ_MODEL=openai/gpt-oss-20b
 ```
 
-The app runs fully on a fresh clone with no `ANTHROPIC_API_KEY` — no setup beyond `pip install` is required to launch it or to use the deterministic rule-engine review (NCCI, MUE, NPI, code validity). See **AI features** below for what changes with a key.
+Fill in `GROQ_API_KEY` yourself, or use **Groq API Key → Enable AI** in the app
+for a session-only key. The password field and saved session override are both
+removed by **Clear Key**. Clearing an override restores any owner-configured key;
+it does not delete environment variables or files.
 
-`runtime.txt` pins Python 3.13 for Streamlit Cloud compatibility — newer Python runtimes have been observed to break `chromadb`'s `opentelemetry`/`protobuf` import chain. ChromaDB itself is optional at runtime: `retrieval/vector_store.py` imports it defensively, and if the import fails for any reason, the Coverage and Coding Validation agents transparently fall back to the curated JSON policy corpus (`retrieval/policy_repository.py`) — the same fallback path already used whenever the vector store is empty or unseeded. The app starts and serves findings either way; only the retrieval source changes.
+Resolution order for nonblank values: session override (API keys only), OS
+environment, repository-root `.env`, Streamlit Secrets, then defaults. A session
+key for one provider never enables the other provider. `.env` is read explicitly
+as UTF-8 without populating OS variables; environment settings win. Configuration
+changes in files require a restart. Streamlit may itself expose top-level secrets
+as environment variables, in which case those values occupy the environment tier.
+Never commit credentials: `.env` and `.streamlit/secrets.toml` are Git-ignored.
 
-## AI features (optional, requires an API key)
+Streamlit Secrets uses top-level TOML:
 
-The Coverage Validation and Coding Validation agents call the Anthropic API and need an `ANTHROPIC_API_KEY`. Without one:
+```toml
+LLM_PROVIDER = "groq"
+GROQ_API_KEY = "paste-your-key-locally"
+GROQ_MODEL = "openai/gpt-oss-20b"
+```
 
-- The header "AI: Enabled" pill is hidden (no "AI: Disabled" pill is shown — the **"Anthropic API Key"** control next to it already conveys that no key is configured), and the in-page AI sections show **"⚠ AI Agents Disabled"** — the app never attempts an Anthropic call and never constructs an Anthropic client.
-- The deterministic rule-engine review (NCCI, MUE, NPI, code validity) remains fully available.
-- Three designated sample claims display **pre-generated, clearly labeled** ("📋 Pre-generated demonstration results") AI findings captured from a real run, so you can preview representative agent output without making a live API call. See `docs/Demo_Script.md`.
+For optional legacy Anthropic support, set `LLM_PROVIDER=anthropic`,
+`ANTHROPIC_API_KEY`, and optionally `ANTHROPIC_MODEL` (default `claude-sonnet-4-6`).
+An Anthropic key is never required for Groq. Configured keys are **unverified**
+until a requested review completes; loading the page makes no LLM request.
 
-There are two ways to enable live AI:
+- **Rule-only review:** deterministic checks ran; AI checks did not run. Missing
+  keys prevent LLM requests. Invalid NPI short-circuits all subsequent checks.
+- **Pre-generated demonstration results:** separately labelled, read-only cached
+  examples for selected synthetic claims; never presented as a live review.
+- **Live Groq review:** coverage and coding requests both completed with valid
+  allowed tool calls. A valid no-concern tool is required to report no concerns.
+- **AI review failed or incomplete:** provider/API/response errors or missing
+  retrieval context prevented completion. Available rule and AI findings remain
+  visible, escalation is required, and no overall successful clean review is shown.
 
-1. **App owner — environment variable or Streamlit secrets** (persistent, for everyone using this deployment):
-   ```bash
-   cp .env.example .env
-   # edit .env and set ANTHROPIC_API_KEY=sk-ant-...
-   ```
-2. **Any user — session key via the UI** (temporary, for just your browser session): click the **"Anthropic API Key"** button next to the AI status pill, paste your own key, and click "Enable AI." The key is held only in Streamlit's session state — never written to disk, never logged, never stored in the audit trail — and disappears when you click "Clear Key" or the browser session ends. A session key takes priority over an app-owner key for the rest of that session.
+The shared adapter uses Groq's [chat-completions API](https://console.groq.com/docs/api-reference)
+and [local tool format](https://console.groq.com/docs/tool-use/local-tool-calling),
+checked on November 8, 2026: `tool_choice="required"`,
+`parallel_tool_calls=false`, `max_completion_tokens=4096`. Tool responses are
+validated as data against an allowlist; no model-selected function is executed.
+Citations must reference retrieved documents, displayed excerpts come from
+retrieved text, and confidence must be supplied as a finite number in [0, 1].
+Run logs contain safe error categories rather than raw provider exceptions.
 
-Either way, the header status pill shows **"● AI: Enabled"** and both agents run as part of "Run Full Review."
+**Reviewer guide:** CPT/HCPCS codes describe services, ICD-10 codes describe
+diagnoses, modifiers add service details, units count billed services, NPI
+identifies the provider, and payer names the insurer. Full Review adds configured
+AI policy checks to rules; Rule-only skips AI. **Accept means agreeing with a
+finding, not approving a claim.** Human decisions are saved as append-only audit
+records. The risk label is a deterministic synthesis, not a trained classifier.
+A separate **Ambulance prediction** tab now runs a genuine saved logistic-regression
+classifier trained on synthetic ambulance data; it does not change that rule risk label.
+See [the model card](docs/ambulance-model-card.md) for the simulator, isolation checks and measured results.
 
 ## UI overview (v1.8a/v1.8b)
 
 The app has no sidebar — the reviewer name field and two status pills live in a header bar at the top of the page:
 
-- **AI status pill** — shows "● AI: Enabled" when an `ANTHROPIC_API_KEY` is set (session key, environment variable, or Streamlit secrets); hidden otherwise. An **"Anthropic API Key"** button next to the pill opens a popover for entering your own key for the current session; its footer notes that pre-generated cached AI results are shown for claims when no key is set.
+- **AI status:** provider-specific key configuration (unverified), with a session key popover; completed review state is shown with each result.
 - **Data Source Status pill** — defaults to "⚪ Data: Not Refreshed" on every fresh page load; nothing is checked or downloaded automatically, so startup stays fast regardless of CMS reference data size. Click the pill to open a popover with a "🔍 Check CMS Data Availability" button — only then does it call `rules/data_source_status.py` and resolve to "🟢 Data: Live CMS" / "🟡 Data: Synthetic fallback" / "🟡 Data: Mixed" (see TD-27 in `docs/Technical_Debt_Register.md`). The result is cached for the rest of the browser session — it won't re-check itself. A "🔄 Refresh Data Status" button appears once checked, useful after updating secrets, deploying new CMS assets, or testing in a different environment.
 - **❔ Getting Started** — an onboarding dialog covering how the system works, AI/demo-mode states, the confidence legend, limitations, and full version history.
 
@@ -160,7 +208,7 @@ A golden-set evaluation harness measures finding precision/recall/F1 against a l
 
 ```bash
 python -m evaluation.run_evaluation          # offline — no Anthropic calls, rule layer measured for real
-python -m evaluation.run_evaluation --live    # real Coverage/Coding Agent calls (default model: claude-sonnet-4-6, override with ANTHROPIC_MODEL)
+python -m evaluation.run_evaluation --live    # real Coverage/Coding Agent calls (default: Groq openai/gpt-oss-20b, override with GROQ_MODEL)
 ```
 
 Saves `latest_report.md`, `latest_results.json`, and `latest_summary.json` to `evaluation/`. Current live benchmark (15-claim golden set, Phase 3B prompt calibration):
@@ -195,7 +243,7 @@ Claim intake (app/) → orchestrator.py
 - `rules/icd10.py` / `rules/icd10_loader.py` — ICD-10-CM code validity and unspecified-diagnosis detection against the real CMS order file
 - `rules/hcpcs.py` — HCPCS Level II format recognition against a small curated common-code set (not a full reference-file loader — see `docs/Technical_Debt_Register.md` TD-06)
 
-**AI Layer** (`agents/`) — only runs if `ANTHROPIC_API_KEY` is set:
+**AI Layer** (`agents/`) — only runs if the selected provider has a key:
 - `agents/coverage_validation.py` — RAG over LCD/NCD chunks → LLM reasoning → cited medical-necessity findings
 - `agents/coding_validation.py` — LLM coding-defensibility review (diagnosis specificity, payer scrutiny risk)
 - `agents/documentation_review.py` — deferred, not implemented (see `docs/Roadmap.md` Phase 6)
@@ -210,3 +258,77 @@ Claim intake (app/) → orchestrator.py
 - `evaluation/` — a golden-set harness that runs the same orchestrator end-to-end against labelled synthetic claims and reports precision/recall/F1 per finding category, in both offline (no API calls) and live modes.
 
 Citation grounding is the load-bearing constraint throughout: an AI finding with no retrieved source is suppressed, never displayed.
+
+
+## Synthetic ambulance classifier: train, evaluate and demo
+
+Python 3.11 on CPU is supported. From PowerShell:
+
+```powershell
+Set-Location C:\AI-Projects\denialguard-medical-billing
+.\.venv\Scripts\python.exe -m pip install -r requirements-demo.txt
+.\.venv\Scripts\python.exe -m ambulance_ml.train --seed 20261109 --families 3000 --output-dir artifacts/ambulance
+.\.venv\Scripts\python.exe -m ambulance_ml.evaluate --artifact-dir artifacts/ambulance
+.\.venv\Scripts\python.exe -m streamlit run app/main.py --server.port 8502
+```
+
+Stop an existing server with Ctrl+C before launching. Training creates the
+fixed-seed dataset and saves both pipelines; evaluation reloads them without
+fitting. Existing saved artifacts are included, so training is only needed to
+reproduce them or intentionally change the experiment. Streamlit loads a cached
+saved model and **never retrains during interactions**. No API key or external
+service is used for training/inference. Optional Groq review stays in Claim Review.
+
+Open **Ambulance prediction**, choose a scenario, edit the claim/documentation
+inputs, then click **Predict simulated denial**. Compare the complete-documentation
+and documentation-gap examples. Inspect held-out metrics, counts, confusion
+matrices and limitations below the form. Inputs are validated; outcomes are
+simulated and do not approve claims or create human audit decisions.
+
+Dataset: **6,000 simulated rows / 3,000 scenario families**. Related variants and
+exact duplicates stay together: training 3,600 rows (1,800 families), validation
+1,200 (600), test 1,200 (600). The 12 pre-submission features cover transport and
+dispatch categories, loaded distance, documentation delay and eight documentation
+flags. IDs, target labels, denial reasons, adjudication/payment outcomes, rule
+scores and AI findings cannot enter the feature matrix. Preprocessing is fitted
+on training only; thresholds maximize validation F1 on a fixed grid.
+
+Measured held-out **synthetic** test results (denial is the positive class):
+
+| Model | Threshold | Denial precision | Denial recall | Denial F1 | Average precision |
+|---|---:|---:|---:|---:|---:|
+| DummyClassifier (prior) | 0.36 | 0.3675 | 1.0000 | 0.5375 | 0.3675 |
+| LogisticRegression | 0.32 | 0.5952 | 0.7937 | 0.6803 | 0.7015 |
+
+The tuned dummy predicts all test rows as denial. Average precision is the
+non-interpolated weighted precision-recall summary, not trapezoidal PR-AUC.
+The test set has **441 simulated denials / 759 simulated non-denials**. These
+numbers reflect the documented simulator only, not real-world prediction accuracy.
+
+The [model card](docs/ambulance-model-card.md) documents every feature, the
+stochastic label formula, assumptions, partitions, packages, validation procedure,
+artifact checksums, exact confusion matrices and limitations. Machine-readable
+metrics, schema, seed and versions are saved in
+[metadata.json](artifacts/ambulance/metadata.json); the frozen-model evaluation is
+[evaluation.json](artifacts/ambulance/evaluation.json).
+
+**Unsupported checks:** existing generic rules are not comprehensive ambulance
+validation. The model does not validate payer-specific coverage/authorization,
+ambulance HCPCS/modifiers, clinical necessity, covered destinations, actual mileage,
+PCS applicability/timing or signature exceptions. Documentation flags are
+self-reported. Probabilities are not calibrated to real claims. Never use this
+prototype for clinical or billing decisions. Load only trusted local joblib files.
+
+## Contributions and attribution
+
+This project builds on [jigger-shah/denial-prevention-copilot](https://github.com/jigger-shah/denial-prevention-copilot).
+Upstream notices and [LICENSE](LICENSE) are preserved. DenialGuard additions include
+provider-neutral Groq integration, safer validation diagnostics, Windows UTF-8
+loading, reviewer help, and this synthetic ambulance ML phase (generator,
+leakage-isolated training/evaluation, saved artifacts, separate UI and tests).
+
+For contributions, keep synthetic data/assumptions explicit, keep identifiers and
+outcomes out of predictors, reserve untouched evaluation data, preserve citation
+checks and append-only human audit decisions, and add offline regression tests.
+Do not commit API keys, PHI or untrusted model artifacts. Avoid tuning against
+published held-out metrics; use a new untouched test sample for future experiments.

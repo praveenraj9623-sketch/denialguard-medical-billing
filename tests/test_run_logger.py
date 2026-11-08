@@ -63,4 +63,4 @@ def test_timed_run_logs_failure_and_reraises(captured_lines):
     record = json.loads(captured_lines[0])
     assert record["success"] is False
     assert record["finding_count"] == 0
-    assert record["error"] == "retrieval failed"
+    assert record["error"] == "unexpected_error"

@@ -146,7 +146,7 @@ def test_refresh_clears_underlying_loader_caches():
 
 def test_ai_key_gear_controls_unaffected_by_default_cms_state():
     at = _run_app()
-    assert any(w.key == "session_api_key_input" for w in at.text_input)
+    assert any(w.key == "session_api_key_input_GROQ_API_KEY" for w in at.text_input)
     assert any(b.key == "enable_session_api_key_btn" for b in at.button)
     assert any(b.key == "clear_session_api_key_btn" for b in at.button)
 
@@ -155,6 +155,6 @@ def test_ai_key_gear_controls_unaffected_after_cms_check():
     at = _run_app()
     at.button(key="check_cms_data_btn").click().run()
 
-    assert any(w.key == "session_api_key_input" for w in at.text_input)
+    assert any(w.key == "session_api_key_input_GROQ_API_KEY" for w in at.text_input)
     assert any(b.key == "enable_session_api_key_btn" for b in at.button)
     assert any(b.key == "clear_session_api_key_btn" for b in at.button)

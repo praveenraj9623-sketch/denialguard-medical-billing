@@ -29,13 +29,13 @@ _logger.setLevel(logging.INFO)
 
 if not _logger.handlers:
     LOG_DIR.mkdir(exist_ok=True)
-    _handler = logging.FileHandler(LOG_FILE)
+    _handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     _handler.setFormatter(logging.Formatter("%(message)s"))
     _logger.addHandler(_handler)
     _logger.propagate = False
 
 
-def log_run(*, claim_id: str, agent: str, finding_count: int, success: bool, latency_ms: float, error: str = "") -> None:
+def log_run(*, claim_id: str, agent: str, finding_count: int, success: bool, latency_ms: float, error: str = "", validation_errors: list | None = None) -> None:
     """Write one structured JSON line for a completed check."""
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -47,6 +47,8 @@ def log_run(*, claim_id: str, agent: str, finding_count: int, success: bool, lat
     }
     if error:
         record["error"] = error
+    if validation_errors:
+        record["validation_errors"] = validation_errors
     _logger.info(json.dumps(record))
 
 
@@ -67,7 +69,7 @@ def timed_run(*, claim_id: str, agent: str):
         yield result
     except Exception as exc:
         latency_ms = (time.perf_counter() - start) * 1000
-        log_run(claim_id=claim_id, agent=agent, finding_count=0, success=False, latency_ms=latency_ms, error=str(exc))
+        log_run(claim_id=claim_id, agent=agent, finding_count=0, success=False, latency_ms=latency_ms, error="unexpected_error")
         raise
     else:
         latency_ms = (time.perf_counter() - start) * 1000
@@ -75,6 +77,8 @@ def timed_run(*, claim_id: str, agent: str):
             claim_id=claim_id,
             agent=agent,
             finding_count=result.get("finding_count", 0),
-            success=True,
+            success=result.get("success", True),
+            error=result.get("error", ""),
+            validation_errors=result.get("validation_errors", []),
             latency_ms=latency_ms,
         )

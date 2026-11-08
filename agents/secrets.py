@@ -1,30 +1,23 @@
-"""
-Secret/config resolution for ANTHROPIC_API_KEY and ANTHROPIC_MODEL.
-
-Resolution order: a per-browser-session key the user entered in the app UI
-(st.session_state), then the OS environment (populated by python-dotenv's
-load_dotenv() from a .env file, or a real env var), then Streamlit Cloud's
-st.secrets, then default. The env-then-secrets order is unchanged from
-before the session-key feature existed — local and hosted app-owner-key
-behavior is identical either way. The session-state check is new (app/main.py's
-gear-icon popover) and is checked first so a user-supplied session key
-overrides an app-owner key for the rest of that browser session.
-
-The session-state and st.secrets accesses are both wrapped in try/except:
-st.session_state/st.secrets raise outside a running Streamlit script (e.g.
-in tests or a plain CLI run, or with no .streamlit/secrets.toml present,
-the normal state for local development) — none of that may ever crash a
-local run or the test suite.
-"""
-
+"""Provider-neutral config. Blank values fall through; keys never leave config/UI."""
 import os
+from pathlib import Path
+from dotenv import dotenv_values
+
+_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+
+
+def clear_session_key(state, name):
+    """Callback runs before widgets render, clearing both secret copies."""
+    state.pop(name, None)
+    state.pop("session_api_key_input_" + name, None)
+
 
 
 def get_secret(name: str, default: str = "") -> str:
-    """Resolve a secret: session key, then OS environment variable, then Streamlit secrets, then default."""
+    """Resolve a secret: session key > OS environment > root .env > Streamlit secrets > default."""
     try:
         import streamlit as st
-        val = st.session_state.get(name)
+        val = st.session_state.get(name) if name.endswith("_API_KEY") else None
         if val:
             return val
     except Exception:
@@ -32,8 +25,11 @@ def get_secret(name: str, default: str = "") -> str:
     val = os.getenv(name)
     if val:
         return val
+    value = dotenv_values(_ROOT_ENV, encoding="utf-8", interpolate=False).get(name)
+    if value:
+        return value
     try:
         import streamlit as st
-        return st.secrets.get(name, default)
+        return st.secrets.get(name, default) or default
     except Exception:
         return default

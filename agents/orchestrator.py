@@ -33,7 +33,7 @@ from agents import denial_prevention
 from agents.coding_validation import validate_coding
 from agents.coverage_validation import validate_coverage
 from agents.run_logger import timed_run
-from agents.secrets import get_secret
+from agents.provider import configured, provider_name
 from rules.models import ClaimIn, Finding, RiskAssessment
 from rules.rule_engine import CHECKS_RUN, review_claim
 
@@ -42,8 +42,8 @@ _CODING_CHECK_LABEL = "Coding validation — LLM coding defensibility review"
 
 
 def _ai_enabled() -> bool:
-    """True iff ANTHROPIC_API_KEY is set (a UI session key, env var, or Streamlit secrets — see agents/secrets.py for resolution order). No Anthropic client is constructed otherwise."""
-    return bool(get_secret("ANTHROPIC_API_KEY"))
+    """A configured key enables attempts; it does not verify connectivity."""
+    return configured()
 
 
 def run_review(claim: ClaimIn) -> tuple[RiskAssessment, dict[str, list[dict]]]:
@@ -65,22 +65,49 @@ def run_review(claim: ClaimIn) -> tuple[RiskAssessment, dict[str, list[dict]]]:
 
     retrieved_policies: dict[str, list[dict]] = {"coverage_validation": [], "coding_validation": []}
 
+    ai_details = {}
     if _rule_layer_short_circuited(rule_findings) or not _ai_enabled():
         checks_run = [CHECKS_RUN[0]] if _rule_layer_short_circuited(rule_findings) else list(CHECKS_RUN)
         coverage_findings: list[Finding] = []
         coding_findings: list[Finding] = []
     else:
-        checks_run = [*CHECKS_RUN, _COVERAGE_CHECK_LABEL, _CODING_CHECK_LABEL]
-        with timed_run(claim_id=claim.claim_id, agent="coverage_validation") as result:
-            coverage_findings, coverage_policies = validate_coverage(claim, rule_findings)
-            retrieved_policies["coverage_validation"] = coverage_policies
-            result["finding_count"] = len(coverage_findings)
-        with timed_run(claim_id=claim.claim_id, agent="coding_validation") as result:
-            coding_findings, coding_policies = validate_coding(claim, rule_findings)
-            retrieved_policies["coding_validation"] = coding_policies
-            result["finding_count"] = len(coding_findings)
+        checks_run = list(CHECKS_RUN)
+        for name, validate, label in (
+            ("coverage_validation", validate_coverage, _COVERAGE_CHECK_LABEL),
+            ("coding_validation", validate_coding, _CODING_CHECK_LABEL),
+        ):
+            with timed_run(claim_id=claim.claim_id, agent=name) as result:
+                output = None
+                try:
+                    output = validate(claim, rule_findings)
+                    findings, policies = output
+                    status = getattr(output, "status", "complete")
+                    error = getattr(output, "error", "")
+                except Exception:
+                    findings, policies, status, error = [], [], "failed", "unexpected_error"
+                ai_details[name] = {"status": status, "error": error}
+                errors = getattr(output, "validation_errors", [])
+                if errors:
+                    ai_details[name]["validation_errors"] = errors
+                retrieved_policies[name] = policies
+                result.update(finding_count=len(findings), success=status == "complete", error=error,
+                              validation_errors=errors)
+                checks_run.append(f"{provider_name().title()}: {label} — {status}")
+                if name == "coverage_validation":
+                    coverage_findings = findings
+                else:
+                    coding_findings = findings
 
     assessment = denial_prevention.synthesize(rule_findings, coverage_findings, coding_findings, checks_run)
+    assessment.ai_provider = provider_name()
+    assessment.ai_details = ai_details
+    assessment.review_mode = (
+        "rule_only" if not assessment.ai_details else
+        "live" if all(d["status"] == "complete" for d in assessment.ai_details.values()) else
+        "incomplete"
+    )
+    if assessment.review_mode == "incomplete":
+        assessment.escalation_required = True
     return assessment, retrieved_policies
 
 
