@@ -1,11 +1,9 @@
-# Synthetic Claims
+# Synthetic claim-review examples
 
-Synthetic claim files for development and golden-set evaluation. No PHI anywhere in this directory.
+These inherited fictional examples support claim review and its golden-set evaluation. They contain no intended real patient records and are not a record of actual payer decisions.
 
-Each CSV row is one claim header. Column schema matches the `ClaimIn` Pydantic model in `db/schema.py`.
+This review dataset is **not** the 6,000-row ambulance classification experiment. The classifier's generated data, partitions, saved pipelines and measured results are under [artifacts/ambulance](../../artifacts/ambulance), with methodology in the [model card](../../docs/ambulance-model-card.md).
 
-Subdirectory convention:
-- `golden/`  — labelled claims with known correct findings, used for precision/recall tracking.
-- `batch/`   — larger unlabelled sets for UI batch-review testing.
+Use the actual fixture files and evaluation loader as the schema source; do not infer that every file is a CSV header or that identifiers represent verified providers. Review finding precision/recall, classifier F1 and upstream historical benchmarks are different evaluations.
 
-All NPIs, patient identifiers, and clinical scenarios are fictitious.
+For app setup and accurately labelled current results, see the [project README](../../README.md). Add only fictional examples, keep expected findings explicit, and do not tune against the published held-out classifier outcomes.
