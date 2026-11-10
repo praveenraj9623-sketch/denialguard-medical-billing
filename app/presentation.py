@@ -10,7 +10,7 @@ CSS = """
 .stMainBlockContainer,.block-container{max-width:1400px;padding-top:4rem!important;padding-bottom:3rem;}
 h1,h2,h3,h4{font-family:'Manrope',sans-serif!important;letter-spacing:-.03em!important;color:var(--dg-ink)!important;}
 h2{font-size:1.4rem!important}h3{font-size:1.16rem!important}h4{font-size:1.05rem!important}
-[data-testid="stCaptionContainer"]{color:var(--dg-muted);line-height:1.6;}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:#576a82!important;line-height:1.7!important;}
 [data-testid="stVerticalBlock"]{gap:.8rem;}
 hr{margin:1rem 0!important;border-color:var(--dg-line)!important;}
 .stButton button,.stDownloadButton button,[data-testid="stPopover"] button{border-radius:9px;min-height:42px;font-weight:600;}
@@ -28,7 +28,7 @@ button[data-baseweb="tab"]{padding:0 1.1rem;font-weight:600;font-size:.91rem;}
 [data-testid="stExpander"]{border-color:var(--dg-line);background:#fff;border-radius:11px;}
 [data-testid="stDataFrame"]{border-radius:12px;}
 div[class*="st-key-finding_card_"]{border:1px solid var(--dg-line)!important;border-radius:15px!important;background:white;padding:20px!important;margin:6px 0 14px;box-shadow:0 3px 13px #20365005;}
-div[class*="st-key-finding_card_"] [data-testid="stCaptionContainer"]{font-size:.78rem;}
+div[class*="st-key-finding_card_"] [data-testid="stCaptionContainer"]{font-size:.8rem;}
 div[class*="st-key-finding_card_"] [data-testid="stTextArea"] textarea{background:#f8fafc;}
 .st-key-header_controls_row{border:1px solid var(--dg-line);border-radius:14px;background:#fff;padding:17px 20px;margin:1rem 0 .4rem;}
 .st-key-header_controls_row [data-testid="stHorizontalBlock"]{align-items:flex-start!important;}
