@@ -26,6 +26,7 @@ if str(_ROOT) not in sys.path:
 
 import pandas as pd
 import streamlit as st
+from app import presentation as ui
 
 
 
@@ -70,10 +71,10 @@ _SEVERITY_STYLE = {
 }
 
 _RISK_CONFIG = {
-    "HIGH":  ("🔴 HIGH RISK — immediate attention required", "error"),
-    "MEDIUM":("🟡 MEDIUM RISK — review recommended", "warning"),
-    "LOW":   ("🔵 LOW RISK — minor issues noted", "info"),
-    "CLEAN": ("🟢 No findings in completed checks", "success"),
+    "HIGH":  ("High-severity findings — human review required", "error"),
+    "MEDIUM":("Medium-severity findings — review recommended", "warning"),
+    "LOW":   ("Low-severity findings — human review remains required", "info"),
+    "CLEAN": ("No findings in completed checks — not claim approval", "success"),
 }
 
 _SL_COLS = [1.7, 0.8, 0.8, 0.6, 1.1, 1.1, 1.1, 1.1, 0.5]
@@ -106,7 +107,7 @@ _WHY_IT_MATTERS = {
 _RECOMMENDED_ACTION = {
     "HIGH": "Review before submission.",
     "MEDIUM": "Review recommended before submission.",
-    "LOW": "Low risk — spot-check if time allows.",
+    "LOW": "Review the findings and applicable documentation before any billing action.",
     "CLEAN": "Human review remains required before submission. Check which validations ran.",
 }
 
@@ -233,9 +234,10 @@ def _render_risk_explanation(risk_score: str, findings: list) -> None:
     col_low.metric("Low", counts["LOW"])
 
     st.info(
-        f"🛠 **Recommended Action**\n\n"
+        f"**Suggested review step**\n\n"
         f"{_RECOMMENDED_ACTION.get(risk_score, 'Review findings below.')}"
     )
+    st.caption("Severity summarises the available findings. It is not a denial probability or a payer decision.")
 
 
 def _citation_is_json_fallback(citation, retrieved_policies: list[dict] | None) -> bool:
@@ -280,13 +282,7 @@ def _render_citation_detail(citation) -> None:
 
     if citation.excerpt:
         st.markdown("**Policy excerpt:**")
-        st.markdown(
-            f'<div style="font-size:0.85rem;color:#374151;font-style:italic;'
-            f'padding:6px 10px;background:#f9fafb;border-left:3px solid #d1d5db;'
-            f'border-radius:0 4px 4px 0;margin-top:4px;">'
-            f'"{citation.excerpt}"</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(ui.excerpt(citation.excerpt), unsafe_allow_html=True)
 
     if policy and policy.get("notes"):
         st.caption(f"Notes: {policy['notes']}")
@@ -312,13 +308,7 @@ def _render_supporting_policies(retrieved_policies: list[dict], cited_doc_id: st
                 st.caption(meta)
             excerpt = policy.get("excerpt")
             if excerpt:
-                st.markdown(
-                    f'<div style="font-size:0.85rem;color:#374151;font-style:italic;'
-                    f'padding:6px 10px;background:#f9fafb;border-left:3px solid #d1d5db;'
-                    f'border-radius:0 4px 4px 0;margin:4px 0 10px;">'
-                    f'"{excerpt[:400]}"</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(ui.excerpt(excerpt[:400]), unsafe_allow_html=True)
 
 
 def _finding_card(
@@ -329,30 +319,18 @@ def _finding_card(
     retrieved_policies: list[dict] | None = None,
 ) -> None:
     fid = finding.finding_id
-    style = _SEVERITY_STYLE.get(finding.severity, {"border": "#6b7280", "card_bg": "#f9fafb"})
-
-    st.markdown(
-        f'<div style="border-left:4px solid {style["border"]};'
-        f'background:{style["card_bg"]};padding:12px 16px;'
-        f'border-radius:0 6px 6px 0;margin-bottom:4px;">'
-        f'{_severity_badge(finding.severity)}'
-        f'{_source_badge(finding)}'
-        f'&nbsp;&nbsp;<strong>{finding.issue}</strong>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.container():
+    with st.container(border=True, key=f"finding_card_{fid}"):
+        st.markdown(ui.finding_header(finding.severity, _source_label(finding), finding.issue), unsafe_allow_html=True)
         col_detail, col_action = st.columns([3, 1])
 
         with col_detail:
             why = _why_it_matters(finding)
             if why:
                 st.caption(f"💡 {why}")
-            st.write(f"**Recommendation:** {finding.recommendation}")
+            st.write(f"**Suggested review action:** {finding.recommendation}")
             st.caption(
                 f"Citation: {_citation_caption(finding.citation)} &nbsp;|&nbsp; "
-                f"Confidence: {finding.confidence:.0%}"
+                f"Reported confidence (uncalibrated): {finding.confidence:.0%}"
             )
             if _citation_is_json_fallback(finding.citation, retrieved_policies):
                 st.caption(
@@ -360,7 +338,7 @@ def _finding_card(
                     "store was empty, unseeded, or unavailable for this claim."
                 )
             if finding.confidence < CONFIDENCE_REVIEW_THRESHOLD:
-                st.caption("⚠️ **Manual Review Recommended** — confidence below 70%")
+                st.caption("Manual review flag — reported confidence below 70%; this is not measured accuracy.")
             with st.expander("📄 View policy detail"):
                 _render_citation_detail(finding.citation)
             if retrieved_policies:
@@ -409,7 +387,6 @@ def _finding_card(
                     st.caption(f"Reason: {stored_reason}")
                 _save_controls(fid, finding, claim_id, reviewer_name, user_decision, repo, saved_key, reason_key)
 
-    st.divider()
 
 
 def _save_controls(
@@ -463,9 +440,10 @@ def _render_checks_expander(checks: list[str]) -> None:
     """Collapsed-by-default list of which validation checks ran — same checks
     data as before, just moved out of an always-visible caption to reduce
     visual noise. No change to what's tracked or how it's computed."""
-    with st.expander(f"Validation Checks Performed ({len(checks)})"):
+    with st.expander(f"Review check log ({len(checks)})"):
+        st.caption("Listing a check does not mean it passed. Read each reported status; failed or skipped checks remain incomplete.")
         for check in checks:
-            st.markdown(f"✓ {check}")
+            st.markdown(f"• {check}")
 
 
 def _render_checks_summary(findings: list) -> None:
@@ -577,7 +555,7 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
         st.divider()
         st.warning(
             "⚠️ **AI Agents Disabled**\n\n"
-            "Use the ⚙️ icon next to the AI status pill to enable AI for this browser "
+            "Use the API Key control in the header to enable AI for this browser "
             "session, or ask the app owner to configure an API key.\n\n"
             "Deterministic rule-engine review remains available."
         )
@@ -588,8 +566,8 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
 
     if not st.session_state.get("ai_reviewed"):
         st.caption(
-            "Run AI-powered coverage and medical necessity analysis against "
-            "retrieved LCD/NCD policy documents."
+            "Request a coverage review using the available policy context. The result labels "
+            "curated JSON fallback when a populated vector index is unavailable."
         )
         if st.button("🤖 Run AI Coverage Analysis", key=f"ai_btn_{claim_id}"):
             with st.spinner("Querying policy documents and analyzing coverage…"):
@@ -615,7 +593,7 @@ def _render_ai_section(claim, claim_id: str, reviewer_name: str, repo: AuditRepo
                     retrieved_policies=ai_policies,
                 )
         elif st.session_state.get("ai_status") == "complete":
-            st.success(f"Live {provider_name().title()} coverage review completed: no coverage concerns reported.")
+            st.success(f"Live {provider_name().title()} coverage review completed: no coverage concerns reported. Human review remains required.")
         else:
             st.warning("AI review failed or incomplete: " + st.session_state.get("ai_error", "unknown"))
 
@@ -650,24 +628,14 @@ def _render_cached_ai_demo(claim_id: str) -> None:
         "live API call. Provide your own key to run live AI analysis instead."
     )
     for finding in cached_findings:
-        style = _SEVERITY_STYLE.get(finding.severity, {"border": "#6b7280", "card_bg": "#f9fafb"})
-        st.markdown(
-            f'<div style="border-left:4px solid {style["border"]};'
-            f'background:{style["card_bg"]};padding:12px 16px;'
-            f'border-radius:0 6px 6px 0;margin-bottom:4px;">'
-            f'{_severity_badge(finding.severity)}'
-            f'{_source_badge(finding)}'
-            f'&nbsp;&nbsp;<strong>{finding.issue}</strong>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(ui.finding_header(finding.severity, _source_label(finding), finding.issue, cached=True), unsafe_allow_html=True)
         why = _why_it_matters(finding)
         if why:
             st.caption(f"💡 {why}")
-        st.write(f"**Recommendation:** {finding.recommendation}")
+        st.write(f"**Suggested review action:** {finding.recommendation}")
         st.caption(
             f"Citation: {_citation_caption(finding.citation)} &nbsp;|&nbsp; "
-            f"Confidence: {finding.confidence:.0%}"
+            f"Reported confidence (uncalibrated): {finding.confidence:.0%}"
         )
         with st.expander("📄 View policy detail"):
             _render_citation_detail(finding.citation)
@@ -940,7 +908,6 @@ def _render_manual_mode(reviewer_name: str, repo: AuditRepository) -> None:
     btn_example.button("📋 Start from a template", key="manual_example_btn", on_click=_load_worked_example)
 
     st.divider()
-    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
     st.caption("Full Review runs rules and, when configured, live AI policy checks. Rule-only uses deterministic checks. "
                "Accept means agreeing with a finding, not approving the claim.")
@@ -1046,7 +1013,7 @@ def _render_sample_mode(reviewer_name: str, repo: AuditRepository) -> None:
                 break
 
     selected_label = st.selectbox(
-        "Select a demo scenario", claim_labels, key="sample_claim_select"
+        "Select a demo scenario", claim_labels, key="sample_claim_select", format_func=ui.scenario_label
     )
     selected_idx = claim_labels.index(selected_label)
     claim_dict = claims[selected_idx]
@@ -1055,22 +1022,7 @@ def _render_sample_mode(reviewer_name: str, repo: AuditRepository) -> None:
         _clear_review_state()
         st.session_state["selected_claim_id"] = claim_dict["claim_id"]
 
-    with st.expander("Claim Details", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**Claim ID:** {claim_dict['claim_id']}")
-            st.write(f"**Payer:** {claim_dict['payer']}")
-            npi_display = claim_dict.get("npi") or "Not provided"
-            st.write(f"**NPI:** {npi_display}")
-            st.write(f"**Place of Service:** {claim_dict['place_of_service']}")
-        with col2:
-            st.write(f"**CPT / HCPCS codes:** {', '.join(claim_dict['cpt_codes'])}")
-            st.write(f"**ICD-10 diagnoses:** {', '.join(claim_dict['icd10_codes'])}")
-            mods = ", ".join(claim_dict.get("modifiers", [])) or "None"
-            st.write(f"**Modifiers:** {mods}")
-
-    st.divider()
-    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+    st.markdown(ui.claim_summary(claim_dict), unsafe_allow_html=True)
 
     st.caption("Full Review runs rules plus configured live AI. Rule-only skips AI. "
                "Accept means agreeing with a finding, not approving a claim.")
@@ -1162,10 +1114,10 @@ def _pill(text: str, bg: str, font_size: str = "0.78rem", padding: str = "3px 10
 
 
 _DATA_STATUS_LABELS = {
-    "file_backed": ("🟢 Data: Live CMS", "Live CMS"),
-    "synthetic_fallback": ("🟡 Data: Synthetic fallback", "Synthetic fallback"),
-    "mixed": ("🟡 Data: Mixed", "Mixed"),
-    "not_checked": ("⚪ Data: Not Refreshed", "Not Refreshed"),
+    "file_backed": ("Data: Reference files", "Reference files"),
+    "synthetic_fallback": ("Data: Synthetic fallback", "Synthetic fallback"),
+    "mixed": ("Data: Mixed sources", "Mixed"),
+    "not_checked": ("Data: Not checked", "Not Refreshed"),
 }
 
 def _render_session_api_key_popover() -> None:
@@ -1210,40 +1162,26 @@ def _render_header() -> str:
     data_source_ready = st.session_state.get("_data_source_ready", False)
     summary = st.session_state.get("_data_source_summary_cache") if data_source_ready else None
 
-    col_title, col_badge = st.columns([4, 2])
-    with col_title:
-        st.markdown("## 🏥 DenialGuard")
-        st.caption("AI researches. Humans decide.")
-    with col_badge:
-        st.markdown(
-            f'<div style="text-align:right;padding-top:26px;">'
-            f'{_pill("Portfolio Project · Synthetic Data Only", "#1e3a8a", font_size="1.0rem", padding="5px 14px")}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    ui.hero()
 
     with st.container(key="header_controls_row"):
-        c_reviewer, c_ai, c_gear, c_data, c_help = st.columns([2.0, 0.85, 1.6, 1.3, 0.5])
+        c_reviewer, c_gear, c_data, c_help = st.columns([2.2, 1.6, 1.6, 0.45])
         with c_reviewer:
             reviewer_name = st.text_input(
                 "Reviewer",
                 key="reviewer_name",
                 placeholder="Your name (required to save decisions)",
             )
-        with c_ai:
-            if _AI_ENABLED:
-                st.markdown(
-                    f'<div style="margin-bottom:25px;">'
-                    f'{_pill(f"● {provider_name().title()}: key configured (unverified)", "#16a34a", font_size="0.92rem", padding="5px 12px")}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            if not _AI_ENABLED:
-                st.caption(f"{provider_name().title()}: no key — rule-only review")
         with c_gear:
+            st.caption("AI provider")
             with st.container(key="ai_gear_col"):
                 _render_session_api_key_popover()
+            if _AI_ENABLED:
+                st.caption(f"{provider_name().title()}: key configured (unverified)")
+            if not _AI_ENABLED:
+                st.caption(f"{provider_name().title()}: no key — rule-only review")
         with c_data:
+            st.caption("Rule reference data")
             label, _ = _DATA_STATUS_LABELS[summary["overall"] if summary is not None else "not_checked"]
             with st.popover(label):
                 if summary is None:
@@ -1258,9 +1196,9 @@ def _render_header() -> str:
                         st.rerun()
                 else:
                     st.caption(
-                        "Reference data backing the deterministic rule layer. Synthetic "
-                        "fallback tables are curated to behave correctly for the demo "
-                        "scenarios — they are smaller, not less accurate for this app."
+                        "This status describes deterministic rule references, not the AI policy index. "
+                        "Synthetic fallback tables cover selected demonstration cases only; "
+                        "their accuracy and completeness for real billing are unvalidated."
                     )
                     for name, info in summary["datasets"].items():
                         state = "🟢 file-backed" if info["status"] == "file_backed" else "🟡 synthetic fallback"
@@ -1291,13 +1229,14 @@ def _render_header() -> str:
                         st.rerun()
                     st.caption("Useful after updating secrets, deploying new CMS assets, or testing in a different environment.")
         with c_help:
-            if st.button("❔", key="help_btn", help="Getting Started", type="primary"):
+            st.caption("Guide")
+            if st.button("Help", key="help_btn", help="Getting Started", type="primary"):
                 _getting_started_dialog()
 
     st.markdown(
         "<style>"
         "div[class*='st-key-header_controls_row'] div[data-testid='stHorizontalBlock']"
-        "{ align-items: flex-end; }"
+        "{ align-items: flex-start; }"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -1323,23 +1262,23 @@ def _getting_started_dialog() -> None:
         "- **Rule Engine** — deterministic checks (NCCI bundling, MUE unit limits, "
         "NPI validity, ICD-10/CPT code validity, missing modifiers). Always runs, no API key needed.\n"
         "- **Coverage Agent** / **Coding Agent** — LLM-backed, citation-grounded checks "
-        "against real LCD/NCD policy text. Require a key for the selected provider (Groq by default)."
+        "against available policy context: an optional vector index or labelled curated JSON fallback. Require a key for the selected provider (Groq by default)."
     )
 
     st.markdown("#### AI status you'll see in this app")
     st.markdown(
         "- **Key configured (unverified)** — an API key is configured (by the app owner, or by you via "
-        "the ⚙️ icon next to the pill for this browser session); Coverage/Coding agents run live.\n"
+        "the API Key control for this browser session); live requests run only when explicitly requested.\n"
         "- **Rule-only review** — no key configured; only the deterministic Rule Engine runs. "
-        "Click the ⚙️ icon to add your own key for this session.\n"
+        "Use the API Key control to add your own key for this session.\n"
         "- **📋 Pre-generated demonstration results** — shown per-claim for select demo "
         "scenarios when AI is disabled, so you can preview real agent output without an API call."
     )
 
     st.markdown("#### Confidence")
     st.markdown(
-        "- Confidence reflects the system's certainty in a finding — it is **not** "
-        "a denial/approval guarantee.\n"
+        "- Rule confidence is a fixed heuristic; AI confidence is model-reported. Neither is "
+        "calibrated accuracy or a denial/approval probability.\n"
         "- Findings below 70% confidence trigger a manual-review flag.\n"
         "- Accept means agreeing with a finding; it does not approve a claim.\n"
         "- AI confidence is not a substitute for coding or compliance judgment."
@@ -1405,7 +1344,7 @@ def _render_recommended_shortcuts(claims: list[dict]) -> None:
     recommended = [by_id[cid] for cid in recommended_ids if cid in by_id]
 
     if recommended:
-        st.caption("Recommended:")
+        st.caption("Quick-start scenarios")
         cols = st.columns(len(recommended))
         for col, c in zip(cols, recommended):
             with col:
@@ -1421,18 +1360,11 @@ def _render_recommended_shortcuts(claims: list[dict]) -> None:
 def main() -> None:
     st.set_page_config(
         page_title="DenialGuard",
-        page_icon="💵",
+        page_icon="🛡️",
         layout="wide",
     )
 
-    st.markdown(
-        "<style>"
-        ".block-container{padding-top:2.5rem;padding-bottom:1rem;}"
-        "hr{margin:0.5rem 0 !important;}"
-        "div[data-testid='stVerticalBlock']{gap:0.6rem;}"
-        "</style>",
-        unsafe_allow_html=True,
-    )
+    ui.style()
 
     repo = get_repo()
     reviewer_name = _render_header()
@@ -1441,7 +1373,7 @@ def main() -> None:
     tab_review, tab_audit, tab_ambulance = st.tabs(["🔍 Claim Review", "📋 Audit Trail", "🚑 Ambulance prediction"])
 
     with tab_review:
-        st.markdown("#### Claim Details")
+        st.markdown(ui.section("Review a synthetic claim", "Inspect potential issues and their sources, then record a human decision.", "Claim workspace"), unsafe_allow_html=True)
 
         mode = st.radio(
             "Claim source",
@@ -1472,10 +1404,13 @@ def main() -> None:
             _render_manual_mode(reviewer_name, repo)
 
     with tab_audit:
+        st.caption("Saved finding decisions, not claim approvals. Hosted demo storage may reset after restart or redeployment.")
         _render_audit_trail(repo)
 
     with tab_ambulance:
         render_ambulance_prediction()
+
+    st.markdown('<div class="dg-footer">Synthetic demonstration only · Finding severity, reported confidence and simulated ML scores are distinct. Human review remains required.</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
